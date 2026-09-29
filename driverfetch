@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+	cat <<'EOF'
+Usage: driverfetch [--all-open-source] [--dry-run] [--yes] [--help]
+
+Scan hardware and suggest Arch Linux driver/firmware packages, nya.
+By default, ask before installing packages with pacman :3
+
+Options:
+	--all-open-source  Add Archinstall's open-source graphics driver set
+	--dry-run          Scan and show suggestions without installing
+	--yes              Install suggestions without prompting
+	--help             Show this help, nya
+EOF
+}
+
+dry_run=false
+assume_yes=false
+all_open_source=false
+for argument in "$@"; do
+	case "$argument" in
+		--all-open-source) all_open_source=true ;;
+		--dry-run) dry_run=true ;;
+		--yes) assume_yes=true ;;
+		--help|-h) usage; exit 0 ;;
+		*) printf 'Unknown option: %s, nya\n' "$argument" >&2; usage >&2; exit 2 ;;
+	esac
+done
+
+if [[ ! -f /etc/arch-release ]]; then
+	printf 'This script is for Arch Linux only, nya.\n' >&2
+	exit 1
+fi
+if ! command -v pacman >/dev/null 2>&1; then
+	printf 'pacman was not found, nya.\n' >&2
+	exit 1
+fi
+if ! command -v lspci >/dev/null 2>&1; then
+	printf 'lspci is needed for the hardware scan; install it with: sudo pacman -S pciutils, nya.\n' >&2
+	exit 1
+fi
+
+declare -a packages=()
+declare -A package_seen=()
+add_package() {
+	if [[ -z ${package_seen[$1]+x} ]]; then
+		packages+=("$1")
+		package_seen[$1]=1
+	fi
+}
+
+printf 'Hardware check, nya\n'
+printf '%s\n' '---------------'
+lspci -nnk
+
+if command -v lsusb >/dev/null 2>&1; then
+	printf '\nUSB devices, nya\n'
+	printf '%s\n' '------------'
+	lsusb
+else
+	printf '\nUSB scan unavailable; install usbutils to enable lsusb, nya.\n'
+fi
+
+has_nvidia=false
+has_network=false
+while read -r _ class vendor_device _; do
+	vendor=${vendor_device%%:*}
+	case "$class" in
+		03*)
+			case "$vendor" in
+				8086) add_package mesa; add_package vulkan-intel ;;
+				1002) add_package mesa; add_package vulkan-radeon ;;
+				10de) has_nvidia=true ;;
+			esac
+			;;
+		02*) has_network=true ;;
+	esac
+done < <(lspci -Dn)
+
+if [[ $has_network == true ]]; then
+	add_package linux-firmware
+fi
+
+if [[ $all_open_source == true ]]; then
+	for package in \
+		mesa \
+		xf86-video-amdgpu \
+		xf86-video-ati \
+		xf86-video-nouveau \
+		libva-intel-driver \
+		intel-media-driver \
+		vpl-gpu-rt \
+		libvpl \
+		vulkan-radeon \
+		vulkan-intel \
+		vulkan-nouveau
+	do
+		add_package "$package"
+	done
+fi
+
+printf '\nDriver suggestions, nya\n'
+printf '%s\n' '---------------'
+if ((${#packages[@]})); then
+	printf 'Packages: %s\n' "${packages[*]}"
+else
+	printf 'No extra packages were spotted by the built-in rules, nya.\n'
+fi
+if [[ $has_nvidia == true ]]; then
+	cat <<'EOF'
+NVIDIA GPU spotted, nya. No package was selected automatically because the
+right driver depends on GPU generation and kernel. Check the ArchWiki NVIDIA
+page before installing one, especially for older GPUs.
+EOF
+fi
+printf '%s\n' 'Most device drivers come with the Linux kernel already, nya.'
+
+if ((${#packages[@]} == 0)); then
+	exit 0
+fi
+if [[ $dry_run == true ]]; then
+	printf '\nDry run complete; nothing was installed :3\n'
+	exit 0
+fi
+
+if [[ $assume_yes != true ]]; then
+	read -r -p 'Install these packages with pacman? [y/N] :3 ' answer
+	case "$answer" in
+		[yY]|[yY][eE][sS]) ;;
+		*) printf 'No packages installed, nya.\n'; exit 0 ;;
+	esac
+fi
+
+if ((EUID == 0)); then
+	pacman_args=(pacman -S --needed)
+else
+	if ! command -v sudo >/dev/null 2>&1; then
+		printf 'sudo is needed to install packages as a non-root user, nya.\n' >&2
+		exit 1
+	fi
+	pacman_args=(sudo pacman -S --needed)
+fi
+if [[ $assume_yes == true ]]; then
+	pacman_args+=(--noconfirm)
+fi
+"${pacman_args[@]}" "${packages[@]}"
