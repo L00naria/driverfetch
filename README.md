@@ -3,7 +3,7 @@
 A tiny hardware-checking helper with a little driver-fetching energy. It scans
 PCI devices with `lspci` and also lists USB devices when `lsusb` is available.
 Then it suggests graphics and firmware packages and can install them after you
-give the go-ahead, nya.
+give the go-ahead, nya!
 
 ## Package Managers
 

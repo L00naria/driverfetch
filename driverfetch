@@ -6,7 +6,7 @@ usage() {
 Usage: driverfetch [--all-open-source] [--dry-run] [--yes] [--help]
 
 Scan hardware and suggest driver/firmware packages for your distro, nya.
-By default, ask before installing packages with your package manager :3
+By default, ask before installing packages with your package manager :3!
 
 Options:
 	--all-open-source  Add the open-source graphics driver bundle
