@@ -5,11 +5,11 @@ usage() {
 	cat <<'EOF'
 Usage: driverfetch [--all-open-source] [--dry-run] [--yes] [--help]
 
-Scan hardware and suggest Arch Linux driver/firmware packages, nya.
-By default, ask before installing packages with pacman :3
+Scan hardware and suggest driver/firmware packages for your distro, nya.
+By default, ask before installing packages with your package manager :3
 
 Options:
-	--all-open-source  Add Archinstall's open-source graphics driver set
+	--all-open-source  Add the open-source graphics driver bundle
 	--dry-run          Scan and show suggestions without installing
 	--yes              Install suggestions without prompting
 	--help             Show this help, nya
@@ -29,16 +29,80 @@ for argument in "$@"; do
 	esac
 done
 
-if [[ ! -f /etc/arch-release ]]; then
-	printf 'This script is for Arch Linux only, nya.\n' >&2
+if [[ ! -r /etc/os-release ]]; then
+	printf 'Cannot identify this distro: /etc/os-release is missing, nya.\n' >&2
 	exit 1
 fi
-if ! command -v pacman >/dev/null 2>&1; then
-	printf 'pacman was not found, nya.\n' >&2
+
+. /etc/os-release
+distro=${ID:-unknown}
+id_like=${ID_LIKE:-}
+manager=''
+for distro_id in "$distro" $id_like; do
+	case "$distro_id" in
+		arch|manjaro|endeavouros) manager=pacman; break ;;
+		debian|ubuntu|linuxmint|pop|elementary) manager=apt-get; break ;;
+		fedora|rhel|centos|rocky|almalinux) manager=dnf; break ;;
+		*opensuse*) manager=zypper; break ;;
+	esac
+done
+
+if [[ -z $manager ]]; then
+	for candidate in apt-get dnf zypper pacman; do
+		if command -v "$candidate" >/dev/null 2>&1; then
+			manager=$candidate
+			break
+		fi
+	done
+fi
+if [[ -z $manager ]] || ! command -v "$manager" >/dev/null 2>&1; then
+	printf 'No supported package manager found (pacman, apt-get, dnf, zypper), nya.\n' >&2
 	exit 1
 fi
+
+package_for_manager() {
+	local package=$1
+	case "$manager:$package" in
+		pacman:*) printf '%s\n' "$package" ;;
+		apt-get:mesa) printf 'mesa\n' ;;
+		apt-get:vulkan-*) printf 'mesa-vulkan-drivers\n' ;;
+		apt-get:xf86-video-amdgpu) printf 'xserver-xorg-video-amdgpu\n' ;;
+		apt-get:xf86-video-ati) printf 'xserver-xorg-video-ati\n' ;;
+		apt-get:xf86-video-nouveau) printf 'xserver-xorg-video-nouveau\n' ;;
+		apt-get:libva-intel-driver|apt-get:intel-media-driver) printf 'intel-media-va-driver\n' ;;
+		apt-get:libvpl) printf 'libvpl2\n' ;;
+		apt-get:linux-firmware) printf 'linux-firmware\n' ;;
+		dnf:mesa) printf 'mesa-dri-drivers\n' ;;
+		dnf:vulkan-*) printf 'mesa-vulkan-drivers\n' ;;
+		dnf:xf86-video-amdgpu) printf 'xorg-x11-drv-amdgpu\n' ;;
+		dnf:xf86-video-ati) printf 'xorg-x11-drv-ati\n' ;;
+		dnf:xf86-video-nouveau) printf 'xorg-x11-drv-nouveau\n' ;;
+		dnf:libva-intel-driver|dnf:intel-media-driver) printf 'intel-media-driver\n' ;;
+		dnf:libvpl) printf 'libvpl\n' ;;
+		dnf:linux-firmware) printf 'linux-firmware\n' ;;
+		zypper:mesa) printf 'Mesa\n' ;;
+		zypper:vulkan-intel) printf 'libvulkan_intel\n' ;;
+		zypper:vulkan-radeon) printf 'libvulkan_radeon\n' ;;
+		zypper:vulkan-nouveau) printf 'libvulkan_nouveau\n' ;;
+		zypper:linux-firmware) printf 'kernel-firmware\n' ;;
+		zypper:libva-intel-driver|zypper:intel-media-driver) printf 'intel-media-driver\n' ;;
+		zypper:libvpl) printf 'libvpl\n' ;;
+		zypper:*) printf '%s\n' "$package" ;;
+		*) return 1 ;;
+	esac
+}
+
+manager_hint() {
+	case "$manager" in
+		pacman) printf 'sudo pacman -S pciutils' ;;
+		apt-get) printf 'sudo apt-get install pciutils' ;;
+		dnf) printf 'sudo dnf install pciutils' ;;
+		zypper) printf 'sudo zypper install pciutils' ;;
+	esac
+}
+
 if ! command -v lspci >/dev/null 2>&1; then
-	printf 'lspci is needed for the hardware scan; install it with: sudo pacman -S pciutils, nya.\n' >&2
+	printf 'lspci is needed for the hardware scan; install it with: %s, nya.\n' "$(manager_hint)" >&2
 	exit 1
 fi
 
@@ -51,6 +115,7 @@ add_package() {
 	fi
 }
 
+printf 'Distro: %s | package manager: %s\n' "${PRETTY_NAME:-$distro}" "$manager"
 printf 'Hardware check, nya\n'
 printf '%s\n' '---------------'
 lspci -nnk
@@ -103,8 +168,21 @@ fi
 
 printf '\nDriver suggestions, nya\n'
 printf '%s\n' '---------------'
-if ((${#packages[@]})); then
-	printf 'Packages: %s\n' "${packages[*]}"
+declare -a install_packages=()
+declare -A install_package_seen=()
+for package in "${packages[@]}"; do
+	if resolved=$(package_for_manager "$package"); then
+		if [[ -z ${install_package_seen[$resolved]+x} ]]; then
+			install_packages+=("$resolved")
+			install_package_seen[$resolved]=1
+		fi
+	else
+		printf 'Skipping unsupported package mapping for %s on %s, nya.\n' "$package" "$manager" >&2
+	fi
+done
+
+if ((${#install_packages[@]})); then
+	printf 'Packages: %s\n' "${install_packages[*]}"
 else
 	printf 'No extra packages were spotted by the built-in rules, nya.\n'
 fi
@@ -117,7 +195,7 @@ EOF
 fi
 printf '%s\n' 'Most device drivers come with the Linux kernel already, nya.'
 
-if ((${#packages[@]} == 0)); then
+if ((${#install_packages[@]} == 0)); then
 	exit 0
 fi
 if [[ $dry_run == true ]]; then
@@ -126,7 +204,7 @@ if [[ $dry_run == true ]]; then
 fi
 
 if [[ $assume_yes != true ]]; then
-	read -r -p 'Install these packages with pacman? [y/N] :3 ' answer
+	read -r -p "Install these packages with $manager? [y/N] :3 " answer
 	case "$answer" in
 		[yY]|[yY][eE][sS]) ;;
 		*) printf 'No packages installed, nya.\n'; exit 0 ;;
@@ -134,15 +212,34 @@ if [[ $assume_yes != true ]]; then
 fi
 
 if ((EUID == 0)); then
-	pacman_args=(pacman -S --needed)
+	install_prefix=()
 else
 	if ! command -v sudo >/dev/null 2>&1; then
 		printf 'sudo is needed to install packages as a non-root user, nya.\n' >&2
 		exit 1
 	fi
-	pacman_args=(sudo pacman -S --needed)
+	install_prefix=(sudo)
 fi
-if [[ $assume_yes == true ]]; then
-	pacman_args+=(--noconfirm)
-fi
-"${pacman_args[@]}" "${packages[@]}"
+
+case "$manager" in
+	pacman)
+		install_args=(-S --needed)
+		[[ $assume_yes == true ]] && install_args+=(--noconfirm)
+		"${install_prefix[@]}" pacman "${install_args[@]}" "${install_packages[@]}"
+		;;
+	apt-get)
+		install_args=(install)
+		[[ $assume_yes == true ]] && install_args+=(-y)
+		"${install_prefix[@]}" apt-get "${install_args[@]}" "${install_packages[@]}"
+		;;
+	dnf)
+		install_args=(install)
+		[[ $assume_yes == true ]] && install_args+=(-y)
+		"${install_prefix[@]}" dnf "${install_args[@]}" "${install_packages[@]}"
+		;;
+	zypper)
+		install_args=(install)
+		[[ $assume_yes == true ]] && install_args+=(--non-interactive)
+		"${install_prefix[@]}" zypper "${install_args[@]}" "${install_packages[@]}"
+		;;
+esac
